@@ -6,27 +6,34 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    timeout-minutes: 360
 
     steps:
-    - name: Setup RDP
-      run: |
-        echo "Setting up your Free RDP..."
-        powershell -command "Set-ExecutionPolicy Bypass -Scope Process -Force; iex ((New-Object System.Net.WebClient).DownloadString('https://raw.githubusercontent.com/azure/setup-rdp/main/setup.ps1'))"
+      - name: Enable RDP access
+        run: |
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+          net user runneradmin "Admin@123" 
 
-    - name: Install Tools (VS Code + Python + C++)
-      shell: pwsh
-      run: |
-        echo "Installing tools..."
-        if (!(Test-Path C:\Tools)) { mkdir C:\Tools }
-        cd C:\Tools
+      - name: Install Chocolatey
+        shell: pwsh
+        run: |
+          Set-ExecutionPolicy Bypass -Scope Process -Force
+          [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+          iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
 
-        choco install -y vscode
-        choco install -y python
-        choco install -y mingw
+      - name: Install VSCode, Python, and C++
+        shell: pwsh
+        run: |
+          choco install vscode python mingw -y
+          if (!(Test-Path "C:\Tools")) { mkdir "C:\Tools" }
 
-        echo "All tools installed successfully!"
-
-    - name: RDP Info
-      run: |
-        echo "✅ Done! You can now connect to your RDP."
-        echo "Open VS Code directly and start coding in C++ or Python."
+      - name: Show RDP Info
+        run: |
+          Write-Host "==============================="
+          Write-Host "✅ RDP is ready!"
+          Write-Host "Username: runneradmin"
+          Write-Host "Password: Admin@123"
+          Write-Host "Use your GitHub Actions IP with port 3389 to connect."
+          Write-Host "==============================="
+          while ($true) { Start-Sleep -Seconds 300 }
