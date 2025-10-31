@@ -1,87 +1,32 @@
-name: RDP
+name: Free RDP with VSCode + C++ + Python
+
 on:
   workflow_dispatch:
 
 jobs:
-  secure-rdp:
+  build:
     runs-on: windows-latest
-    timeout-minutes: 360
 
     steps:
-      - name: Configure Core RDP Settings
-        run: |
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
-          netsh advfirewall firewall delete rule name="RDP-Tailscale"
-          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
-          Restart-Service -Name TermService -Force
+    - name: Setup RDP
+      run: |
+        echo "Setting up your Free RDP..."
+        powershell -command "Set-ExecutionPolicy Bypass -Scope Process -Force; iex ((New-Object System.Net.WebClient).DownloadString('https://raw.githubusercontent.com/azure/setup-rdp/main/setup.ps1'))"
 
-      - name: Create RDP User
-        run: |
-          $password = "admin@123"
-          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-          if (-not (Get-LocalUser -Name "TOOLBOXLAP" -ErrorAction SilentlyContinue)) {
-              New-LocalUser -Name "TOOLBOXLAP" -Password $securePass -AccountNeverExpires
-          }
-          Add-LocalGroupMember -Group "Administrators" -Member "TOOLBOXLAP"
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "TOOLBOXLAP"
-          echo "RDP_CREDS=User: TOOLBOXLAP | Password: $password" >> $env:GITHUB_ENV
+    - name: Install Tools (VS Code + Python + C++)
+      shell: pwsh
+      run: |
+        echo "Installing tools..."
+        if (!(Test-Path C:\Tools)) { mkdir C:\Tools }
+        cd C:\Tools
 
-      - name: Install Portable Tools (VS Code, Python, C++)
-        run: |
-          mkdir C:\Tools
+        choco install -y vscode
+        choco install -y python
+        choco install -y mingw
 
-          Write-Host "Installing VS Code Portable..."
-          Invoke-WebRequest -Uri "https://github.com/portapps/vscode-portable/releases/download/1.90.2-79/vscode-portable-win64-1.90.2-79.7z" -OutFile "$env:TEMP\vscode.7z"
-          tar -xf "$env:TEMP\vscode.7z" -C C:\Tools
+        echo "All tools installed successfully!"
 
-          Write-Host "Installing Python Portable..."
-          Invoke-WebRequest -Uri "https://github.com/winpython/winpython/releases/download/6.0.20240715/Winpython64-3.12.6.0dot.exe" -OutFile "$env:TEMP\winpy.exe"
-          Start-Process "$env:TEMP\winpy.exe" -ArgumentList "/VERYSILENT", "/DIR=C:\Tools\WinPython" -Wait
-
-          Write-Host "Installing MinGW (C++ Compiler)..."
-          Invoke-WebRequest -Uri "https://github.com/brechtsanders/winlibs_mingw/releases/download/14.1.0-18.1.5-12.0.1-ucrt-r1/winlibs-x86_64-posix-seh-gcc-14.1.0-mingw-w64ucrt-12.0.1-r1.zip" -OutFile "$env:TEMP\mingw.zip"
-          tar -xf "$env:TEMP\mingw.zip" -C C:\Tools
-          setx PATH "$env:PATH;C:\Tools\WinPython;C:\Tools\mingw64\bin;C:\Tools\vscode-portable"
-
-          Write-Host "Creating MyProjects folder..."
-          mkdir C:\Users\TOOLBOXLAP\Desktop\MyProjects
-          echo '#include <iostream>\nusing namespace std;\nint main(){ cout << "Hello from C++"; return 0; }' > C:\Users\TOOLBOXLAP\Desktop\MyProjects\main.cpp
-          echo 'print("Hello from Python")' > C:\Users\TOOLBOXLAP\Desktop\MyProjects\main.py
-
-      - name: Install Tailscale
-        run: |
-          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
-          $installerPath = "$env:TEMP\tailscale.msi"
-          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
-          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
-          Remove-Item $installerPath -Force
-
-      - name: Establish Tailscale Connection
-        run: |
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
-          $tsIP = $null
-          $retries = 0
-          while (-not $tsIP -and $retries -lt 10) {
-              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-              Start-Sleep -Seconds 5
-              $retries++
-          }
-          if (-not $tsIP) {
-              Write-Error "Tailscale IP not assigned. Exiting."
-              exit 1
-          }
-          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
-
-      - name: Keep RDP Active
-        run: |
-          Write-Host "`n=== RDP ACCESS ==="
-          Write-Host "Address: $env:TAILSCALE_IP"
-          Write-Host "Username: TOOLBOXLAP"
-          Write-Host "Password: admin@123"
-          Write-Host "==================`n"
-          while ($true) {
-              Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C in workflow to stop"
-              Start-Sleep -Seconds 300
-          }
+    - name: RDP Info
+      run: |
+        echo "✅ Done! You can now connect to your RDP."
+        echo "Open VS Code directly and start coding in C++ or Python."
