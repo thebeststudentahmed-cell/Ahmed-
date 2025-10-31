@@ -1,160 +1,51 @@
- name: RDP
+name: RDP
 on:
   workflow_dispatch:
 
 jobs:
   secure-rdp:
     runs-on: windows-latest
-    # أقصى مدة لجوب على GitHub-hosted = 360 دقائق (6 ساعات)
     timeout-minutes: 360
-    steps:
-      - name: Checkout (optional if تحتاج الريبو)
-        uses: actions/checkout@v4
 
+    steps:
       - name: Configure Core RDP Settings
-        shell: powershell
         run: |
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
-          # Allow RDP in firewall
-          netsh advfirewall firewall delete rule name="RDP-Tailscale" -ErrorAction SilentlyContinue
+          netsh advfirewall firewall delete rule name="RDP-Tailscale"
           netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
           Restart-Service -Name TermService -Force
 
-      - name: Create RDP User with Static Password (from secrets)
-        shell: powershell
-        env:
-          RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
+      - name: Create RDP User with Static Password
         run: |
-          if (-not $env:RDP_PASSWORD) {
-            Write-Error "RDP_PASSWORD secret is not set. Set it in repository secrets."
-            exit 1
-          }
-          $passwordPlain = $env:RDP_PASSWORD
-          $securePass = ConvertTo-SecureString $passwordPlain -AsPlainText -Force
+          $password = "admin@123"
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
 
           if (-not (Get-LocalUser -Name "TOOLBOXLAP" -ErrorAction SilentlyContinue)) {
               New-LocalUser -Name "TOOLBOXLAP" -Password $securePass -AccountNeverExpires
           }
 
-          Add-LocalGroupMember -Group "Administrators" -Member "TOOLBOXLAP" -ErrorAction SilentlyContinue
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "TOOLBOXLAP" -ErrorAction SilentlyContinue
+          Add-LocalGroupMember -Group "Administrators" -Member "TOOLBOXLAP"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "TOOLBOXLAP"
 
-          # لا تضع معلومات حساسة في الـlogs - نحفظها للبيئة فقط
-          Write-Host "RDP user ensured."
+          echo "RDP_CREDS=User: TOOLBOXLAP | Password: $password" >> $env:GITHUB_ENV
 
-      - name: Install Tailscale (for private networking)
-        shell: powershell
+      - name: Install Tools (VS Code, Python, C++)
         run: |
-          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
-          $installerPath = "$env:TEMP\tailscale.msi"
-          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
-          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
-          Remove-Item $installerPath -Force
+          Write-Host "Installing VS Code..."
+          Invoke-WebRequest -Uri "https://update.code.visualstudio.com/latest/win32-x64-user/stable" -OutFile "$env:TEMP\vscode.exe"
+          Start-Process "$env:TEMP\vscode.exe" -ArgumentList "/silent", "/mergetasks=!runcode" -Wait
 
-      - name: Establish Tailscale Connection
-        shell: powershell
-        env:
-          TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
-        run: |
-          if (-not $env:TAILSCALE_AUTH_KEY) {
-            Write-Error "TAILSCALE_AUTH_KEY secret is not set."
-            exit 1
-          }
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=$env:TAILSCALE_AUTH_KEY --hostname="gh-runner-$env:GITHUB_RUN_ID"
-          $tsIP = $null
-          $retries = 0
-          while (-not $tsIP -and $retries -lt 12) {
-              $tsIP = (& "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4) -join "`n"
-              Start-Sleep -Seconds 5
-              $retries++
-          }
-          if (-not $tsIP) {
-              Write-Error "Tailscale IP not assigned. Exiting."
-              exit 1
-          }
-          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+          Write-Host "Installing Python..."
+          Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.12.6/python-3.12.6-amd64.exe" -OutFile "$env:TEMP\python.exe"
+          Start-Process "$env:TEMP\python.exe" -ArgumentList "/quiet InstallAllUsers=1 PrependPath=1 Include_test=0" -Wait
 
-      - name: Verify RDP Accessibility
-        shell: powershell
-        run: |
-          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
-          $test = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
-          if (-not $test.TcpTestSucceeded) {
-              Write-Error "TCP connection to RDP port 3389 failed"
-              exit 1
-          }
-          Write-Host "TCP connectivity successful!"
+          Write-Host "Installing MinGW (C++ compiler)..."
+          Invoke-WebRequest -Uri "https://github.com/niXman/mingw-builds-binaries/releases/download/12.2.0-rt_v10-rev1/x86_64-12.2.0-release-posix-seh-rt_v10-rev1.7z" -OutFile "$env:TEMP\mingw.7z"
+          mkdir C:\mingw
+          tar -xvf "$env:TEMP\mingw.7z" -C C:\mingw --strip-components=1
+          setx PATH "$env:PATH;C:\mingw\bin"
 
-      # -------------------------
-      # هنا نضيف تثبيت الأدوات المطلوبة
-      # -------------------------
-      - name: Install Chocolatey (if missing) and core tools
-        shell: powershell
-        run: |
-          if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
-            Set-ExecutionPolicy Bypass -Scope Process -Force
-            iex ((New-Object System.Net.WebClient).DownloadString('https://chocolatey.org/install.ps1'))
-          } else {
-            Write-Host "choco already present"
-          }
-          choco feature enable -n allowGlobalConfirmation
-
-      - name: Install VS Code, Python, MinGW, CMake, Git (via choco)
-        shell: powershell
-        run: |
-          choco install -y vscode python git cmake mingw
-          # تحديث PATH قد يحتاج جلسة جديدة؛ نتحقق
-          $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
-          python --version
-          git --version
-          cmake --version
-          g++ --version
-
-      - name: Install VS Code Extensions (C++ support)
-        shell: powershell
-        run: |
-          # مسار code.exe بعد تثبيت VS Code عبر choco
-          $codeCmd = "${env:ProgramFiles}\Microsoft VS Code\bin\code.cmd"
-          if (-not (Test-Path $codeCmd)) {
-            # مسارات بديلة
-            $codeCmd = "${env:ProgramFiles(x86)}\Microsoft VS Code\bin\code.cmd"
-          }
-          if (-not (Test-Path $codeCmd)) {
-            Write-Warning "code.cmd not found; skipping extension install"
-          } else {
-            & $codeCmd --install-extension ms-vscode.cpptools --force
-            & $codeCmd --install-extension ms-vscode.cmake-tools --force
-            & $codeCmd --install-extension ms-vscode.cpptools-extension-pack --force || true
-          }
-
-      - name: Clone or Update Your Repo (optional)
-        shell: powershell
-        run: |
-          $projects = "C:\projects"
-          $repoUrl = "https://github.com/username/repo.git"  # غيّر للرابط حقك
-          New-Item -ItemType Directory -Force -Path $projects | Out-Null
-          $repoDir = Join-Path $projects "repo"
-          if (-not (Test-Path (Join-Path $repoDir ".git"))) {
-            git clone $repoUrl $repoDir
-          } else {
-            cd $repoDir
-            git reset --hard
-            git pull --rebase
-          }
-
-      - name: Show RDP Info and keep job alive until timeout (use ctrl+c in workflow to stop)
-        shell: powershell
-        run: |
-          Write-Host "`n=== RDP ACCESS ==="
-          Write-Host "Address: $env:TAILSCALE_IP"
-          Write-Host "Username: TOOLBOXLAP"
-          Write-Host "Password: (from secret RDP_PASSWORD)"
-          Write-Host "==================`n"
-          # keep-alive loop (سيبقى حتى نهاية الـtimeout)
-          $end = (Get-Date).AddMinutes(340)
-          while ((Get-Date) -lt $end) {
-            Write-Host "[$(Get-Date)] RDP Active - will auto-stop near workflow timeout."
-            Start-Sleep -Seconds 300
-          }
+          Write-Host "Creating project folder..."
+          mkdir
