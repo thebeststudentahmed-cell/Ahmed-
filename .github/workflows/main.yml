@@ -17,35 +17,71 @@ jobs:
           netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
           Restart-Service -Name TermService -Force
 
-      - name: Create RDP User with Static Password
+      - name: Create RDP User
         run: |
           $password = "admin@123"
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-
           if (-not (Get-LocalUser -Name "TOOLBOXLAP" -ErrorAction SilentlyContinue)) {
               New-LocalUser -Name "TOOLBOXLAP" -Password $securePass -AccountNeverExpires
           }
-
           Add-LocalGroupMember -Group "Administrators" -Member "TOOLBOXLAP"
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "TOOLBOXLAP"
-
           echo "RDP_CREDS=User: TOOLBOXLAP | Password: $password" >> $env:GITHUB_ENV
 
-      - name: Install Tools (VS Code, Python, C++)
+      - name: Install Portable Tools (VS Code, Python, C++)
         run: |
-          Write-Host "Installing VS Code..."
-          Invoke-WebRequest -Uri "https://update.code.visualstudio.com/latest/win32-x64-user/stable" -OutFile "$env:TEMP\vscode.exe"
-          Start-Process "$env:TEMP\vscode.exe" -ArgumentList "/silent", "/mergetasks=!runcode" -Wait
+          mkdir C:\Tools
 
-          Write-Host "Installing Python..."
-          Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.12.6/python-3.12.6-amd64.exe" -OutFile "$env:TEMP\python.exe"
-          Start-Process "$env:TEMP\python.exe" -ArgumentList "/quiet InstallAllUsers=1 PrependPath=1 Include_test=0" -Wait
+          Write-Host "Installing VS Code Portable..."
+          Invoke-WebRequest -Uri "https://github.com/portapps/vscode-portable/releases/download/1.90.2-79/vscode-portable-win64-1.90.2-79.7z" -OutFile "$env:TEMP\vscode.7z"
+          tar -xf "$env:TEMP\vscode.7z" -C C:\Tools
 
-          Write-Host "Installing MinGW (C++ compiler)..."
-          Invoke-WebRequest -Uri "https://github.com/niXman/mingw-builds-binaries/releases/download/12.2.0-rt_v10-rev1/x86_64-12.2.0-release-posix-seh-rt_v10-rev1.7z" -OutFile "$env:TEMP\mingw.7z"
-          mkdir C:\mingw
-          tar -xvf "$env:TEMP\mingw.7z" -C C:\mingw --strip-components=1
-          setx PATH "$env:PATH;C:\mingw\bin"
+          Write-Host "Installing Python Portable..."
+          Invoke-WebRequest -Uri "https://github.com/winpython/winpython/releases/download/6.0.20240715/Winpython64-3.12.6.0dot.exe" -OutFile "$env:TEMP\winpy.exe"
+          Start-Process "$env:TEMP\winpy.exe" -ArgumentList "/VERYSILENT", "/DIR=C:\Tools\WinPython" -Wait
 
-          Write-Host "Creating project folder..."
-          mkdir
+          Write-Host "Installing MinGW (C++ Compiler)..."
+          Invoke-WebRequest -Uri "https://github.com/brechtsanders/winlibs_mingw/releases/download/14.1.0-18.1.5-12.0.1-ucrt-r1/winlibs-x86_64-posix-seh-gcc-14.1.0-mingw-w64ucrt-12.0.1-r1.zip" -OutFile "$env:TEMP\mingw.zip"
+          tar -xf "$env:TEMP\mingw.zip" -C C:\Tools
+          setx PATH "$env:PATH;C:\Tools\WinPython;C:\Tools\mingw64\bin;C:\Tools\vscode-portable"
+
+          Write-Host "Creating MyProjects folder..."
+          mkdir C:\Users\TOOLBOXLAP\Desktop\MyProjects
+          echo '#include <iostream>\nusing namespace std;\nint main(){ cout << "Hello from C++"; return 0; }' > C:\Users\TOOLBOXLAP\Desktop\MyProjects\main.cpp
+          echo 'print("Hello from Python")' > C:\Users\TOOLBOXLAP\Desktop\MyProjects\main.py
+
+      - name: Install Tailscale
+        run: |
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
+          Remove-Item $installerPath -Force
+
+      - name: Establish Tailscale Connection
+        run: |
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
+          $tsIP = $null
+          $retries = 0
+          while (-not $tsIP -and $retries -lt 10) {
+              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+              Start-Sleep -Seconds 5
+              $retries++
+          }
+          if (-not $tsIP) {
+              Write-Error "Tailscale IP not assigned. Exiting."
+              exit 1
+          }
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+
+      - name: Keep RDP Active
+        run: |
+          Write-Host "`n=== RDP ACCESS ==="
+          Write-Host "Address: $env:TAILSCALE_IP"
+          Write-Host "Username: TOOLBOXLAP"
+          Write-Host "Password: admin@123"
+          Write-Host "==================`n"
+          while ($true) {
+              Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C in workflow to stop"
+              Start-Sleep -Seconds 300
+          }
