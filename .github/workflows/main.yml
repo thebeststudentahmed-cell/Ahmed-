@@ -1,39 +1,41 @@
-name: Free RDP with VSCode + C++ + Python
+name: Windows RDP with VSCode
 
-on:
-  workflow_dispatch:
+on: workflow_dispatch
 
 jobs:
   build:
     runs-on: windows-latest
-    timeout-minutes: 360
 
     steps:
-      - name: Enable RDP access
-        run: |
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
-          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-          net user runneradmin "Admin@123" 
+    - name: Enable RDP and install tools
+      run: |
+        echo "==> Preparing system..."
+        Set-ExecutionPolicy Bypass -Scope Process -Force
+        mkdir C:\Tools -ErrorAction SilentlyContinue
 
-      - name: Install Chocolatey
-        shell: pwsh
-        run: |
-          Set-ExecutionPolicy Bypass -Scope Process -Force
-          [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-          iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+        echo "==> Installing Tailscale..."
+        Invoke-WebRequest https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe -OutFile C:\Tools\tailscale.exe
+        Start-Process -FilePath C:\Tools\tailscale.exe -ArgumentList "/quiet" -Wait
 
-      - name: Install VSCode, Python, and C++
-        shell: pwsh
-        run: |
-          choco install vscode python mingw -y
-          if (!(Test-Path "C:\Tools")) { mkdir "C:\Tools" }
+        echo "==> Installing VS Code..."
+        Invoke-WebRequest https://update.code.visualstudio.com/latest/win32-x64-user/stable -OutFile C:\Tools\vscode.exe
+        Start-Process -FilePath C:\Tools\vscode.exe -ArgumentList "/VERYSILENT" -Wait
 
-      - name: Show RDP Info
-        run: |
-          Write-Host "==============================="
-          Write-Host "✅ RDP is ready!"
-          Write-Host "Username: runneradmin"
-          Write-Host "Password: Admin@123"
-          Write-Host "Use your GitHub Actions IP with port 3389 to connect."
-          Write-Host "==============================="
-          while ($true) { Start-Sleep -Seconds 300 }
+        echo "==> Installing C++ build tools..."
+        choco install -y mingw
+
+        echo "==> Installing Python..."
+        choco install -y python
+
+        echo "==> Setup done."
+
+    - name: Setup Tailscale Connection
+      run: |
+        echo "==> Starting Tailscale..."
+        Start-Process -FilePath "C:\Program Files (x86)\Tailscale IPN\tailscale.exe" -ArgumentList "up --authkey %TAILSCALE_KEY% --hostname github-runner" -Wait
+        echo "Tailscale connected!"
+
+    - name: Display connection info
+      run: |
+        echo "==> Use your Tailscale IP with port 3389 to connect."
+        ipconfig | findstr "IPv4"
