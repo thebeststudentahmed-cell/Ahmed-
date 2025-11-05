@@ -81,8 +81,3 @@ jobs:
               Start-Sleep -Seconds 300
           }
 
-
-    - name: Display connection info
-      run: |
-        echo "==> Use your Tailscale IP with port 3389 to connect."
-        ipconfig | findstr "IPv4"
