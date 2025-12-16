@@ -1,32 +1,74 @@
-name: Ubuntu RDP
+name: RDP Debian macOS Style + Dev Tools
 
 on:
   workflow_dispatch:
 
 jobs:
-  ubuntu-rdp:
+  setup-rdp:
     runs-on: ubuntu-latest
+    timeout-minutes: 360
 
     steps:
-      - name: Update system
-        run: sudo apt update
+    - name: Update system
+      run: |
+        sudo apt update && sudo apt upgrade -y
 
-      - name: Install XFCE Desktop + xRDP
-        run: |
-          sudo apt install -y xfce4 xfce4-goodies xrdp
-          echo xfce4-session > ~/.xsession
-          sudo systemctl enable xrdp
-          sudo systemctl restart xrdp
+    - name: Install GNOME Desktop
+      run: |
+        sudo apt install -y ubuntu-desktop gnome-tweaks gnome-shell-extensions
 
-      - name: Create user password
-        run: |
-          echo "runner:123456" | sudo chpasswd
+    - name: Install Plank Dock
+      run: |
+        sudo apt install -y plank
 
-      - name: Show connection info
-        run: |
-          echo "=============================="
-          echo "USERNAME: runner"
-          echo "PASSWORD: 123456"
-          echo "RDP PORT : 3389"
-          echo "=============================="
-          ip a
+    - name: Install basic tools
+      run: |
+        sudo apt install -y wget curl git unzip fonts-firacode
+
+    - name: Install macOS Theme (WhiteSur)
+      run: |
+        cd /tmp
+        git clone https://github.com/vinceliuice/WhiteSur-gtk-theme.git
+        cd WhiteSur-gtk-theme
+        sudo ./install.sh -l -c light -c dark
+
+    - name: Install macOS Icons
+      run: |
+        cd /tmp
+        git clone https://github.com/vinceliuice/WhiteSur-icon-theme.git
+        cd WhiteSur-icon-theme
+        sudo ./install.sh
+
+    - name: Apply macOS-like GNOME settings
+      run: |
+        gsettings set org.gnome.desktop.interface gtk-theme "WhiteSur-Light" || true
+        gsettings set org.gnome.desktop.interface icon-theme "WhiteSur" || true
+        gsettings set org.gnome.desktop.interface font-name "Cantarell 11" || true
+
+    - name: Install VS Code
+      run: |
+        wget -qO- https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor > packages.microsoft.gpg
+        sudo install -o root -g root -m 644 packages.microsoft.gpg /etc/apt/trusted.gpg.d/
+        sudo sh -c 'echo "deb [arch=amd64] https://packages.microsoft.com/repos/code stable main" > /etc/apt/sources.list.d/vscode.list'
+        sudo apt update
+        sudo apt install -y code
+
+    - name: Install Python
+      run: |
+        sudo apt install -y python3 python3-pip python3-venv
+
+    - name: Install Docker
+      run: |
+        curl -fsSL https://get.docker.com | sudo sh
+        sudo usermod -aG docker $USER
+
+    - name: Install n8n
+      run: |
+        sudo npm install -g n8n || true
+
+    - name: Start Plank Dock
+      run: |
+        plank &
+
+    - name: Start RDP via tmate
+      uses: mxschmitt/action-tmate@v3
