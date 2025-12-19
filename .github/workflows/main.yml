@@ -1,74 +1,83 @@
-name: RDP Debian macOS Style + Dev Tools
-
+name: RDP
 on:
   workflow_dispatch:
-
 jobs:
-  setup-rdp:
-    runs-on: ubuntu-latest
-    timeout-minutes: 360
-
+  secure-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 3600
     steps:
-    - name: Update system
-      run: |
-        sudo apt update && sudo apt upgrade -y
+      - name: Configure Core RDP Settings
+        run: |
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
+          netsh advfirewall firewall delete rule name="RDP-Tailscale"
+          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
+          Restart-Service -Name TermService -Force
 
-    - name: Install GNOME Desktop
-      run: |
-        sudo apt install -y ubuntu-desktop gnome-tweaks gnome-shell-extensions
+      - name: Create RDP User with Static Password
+        run: |
+          $password = "admin@123"
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
 
-    - name: Install Plank Dock
-      run: |
-        sudo apt install -y plank
+          if (-not (Get-LocalUser -Name "TOOLBOXLAP" -ErrorAction SilentlyContinue)) {
+              New-LocalUser -Name "TOOLBOXLAP" -Password $securePass -AccountNeverExpires
+          }
 
-    - name: Install basic tools
-      run: |
-        sudo apt install -y wget curl git unzip fonts-firacode
+          Add-LocalGroupMember -Group "Administrators" -Member "TOOLBOXLAP"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "TOOLBOXLAP"
 
-    - name: Install macOS Theme (WhiteSur)
-      run: |
-        cd /tmp
-        git clone https://github.com/vinceliuice/WhiteSur-gtk-theme.git
-        cd WhiteSur-gtk-theme
-        sudo ./install.sh -l -c light -c dark
+          echo "RDP_CREDS=User: TOOLBOXLAP | Password: $password" >> $env:GITHUB_ENV
 
-    - name: Install macOS Icons
-      run: |
-        cd /tmp
-        git clone https://github.com/vinceliuice/WhiteSur-icon-theme.git
-        cd WhiteSur-icon-theme
-        sudo ./install.sh
+          if (-not (Get-LocalUser -Name "TOOLBOXLAP")) {
+              Write-Error "User creation failed"
+              exit 1
+          }
 
-    - name: Apply macOS-like GNOME settings
-      run: |
-        gsettings set org.gnome.desktop.interface gtk-theme "WhiteSur-Light" || true
-        gsettings set org.gnome.desktop.interface icon-theme "WhiteSur" || true
-        gsettings set org.gnome.desktop.interface font-name "Cantarell 11" || true
+      - name: Install Tailscale
+        run: |
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
 
-    - name: Install VS Code
-      run: |
-        wget -qO- https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor > packages.microsoft.gpg
-        sudo install -o root -g root -m 644 packages.microsoft.gpg /etc/apt/trusted.gpg.d/
-        sudo sh -c 'echo "deb [arch=amd64] https://packages.microsoft.com/repos/code stable main" > /etc/apt/sources.list.d/vscode.list'
-        sudo apt update
-        sudo apt install -y code
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
+          Remove-Item $installerPath -Force
 
-    - name: Install Python
-      run: |
-        sudo apt install -y python3 python3-pip python3-venv
+      - name: Establish Tailscale Connection
+        run: |
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
+          $tsIP = $null
+          $retries = 0
+          while (-not $tsIP -and $retries -lt 10) {
+              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+              Start-Sleep -Seconds 5
+              $retries++
+          }
+          if (-not $tsIP) {
+              Write-Error "Tailscale IP not assigned. Exiting."
+              exit 1
+          }
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
 
-    - name: Install Docker
-      run: |
-        curl -fsSL https://get.docker.com | sudo sh
-        sudo usermod -aG docker $USER
+      - name: Verify RDP Accessibility
+        run: |
+          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
+          $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
+          if (-not $testResult.TcpTestSucceeded) {
+              Write-Error "TCP connection to RDP port 3389 failed"
+              exit 1
+          }
+          Write-Host "TCP connectivity successful!"
 
-    - name: Install n8n
-      run: |
-        sudo npm install -g n8n || true
+      - name: Maintain Connection
+        run: |
+          Write-Host "`n=== RDP ACCESS ==="
+          Write-Host "Address: $env:TAILSCALE_IP"
+          Write-Host "Username: TOOLBOXLAP"
+          Write-Host "Password: admin@123"
+          Write-Host "==================`n"
+          while ($true) {
+              Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C in workflow to terminate"
+              Start-Sleep -Seconds 300
+          }
 
-    - name: Start Plank Dock
-      run: |
-        plank &
-
-    - name: Start RDP via tmate
-      uses: mxschmitt/action-tmate@v3
